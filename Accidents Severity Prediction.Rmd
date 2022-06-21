@@ -1,0 +1,1203 @@
+---
+title: "Predict Accident Severity When an Accident Takes Place Using Machine Learning"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_notebook
+---
+
+```{r echo = FALSE, message = FALSE}
+# in this chunk of R code, we will be loading all necessary libraries
+
+if(require(dplyr) == FALSE){
+  install.packages('dplyr')
+  library(dplyr)
+}
+
+if(require(lubridate) == FALSE){
+  install.packages('lubridate')
+  library(lubridate)
+}
+
+if(require(validate) == FALSE){
+  install.packages('validate')
+  library(validate)
+}
+
+if(require(gmodels) == FALSE){
+  install.packages('gmodels')
+  library(gmodels)
+}
+
+if(require(scales) == FALSE){
+  install.packages('scales')
+  library(scales)
+}
+library(ggplot2)
+library(ggpubr)
+```
+
+```{r}
+# Note: The data can be downloaded from: https://www.kaggle.com/silicon99/dft-accident-data
+```
+
+```{r echo = FALSE, message = FALSE}
+# clean environment if necessary
+# rm(list = ls())
+
+# load csv files locally, to do: alternate to load from github
+accidents.df <- read.csv("Accidents0515.csv", stringsAsFactors = FALSE)
+casualties.df <- read.csv("Casualties0515.csv", stringsAsFactors = FALSE)
+vehicles.df <- read.csv("Vehicles0515.csv", stringsAsFactors = FALSE)
+```
+
+```{r echo = FALSE, message = FALSE}
+# check number of rows for each to plan merging
+nrow(accidents.df)
+nrow(casualties.df)
+nrow(vehicles.df)
+```
+
+```{r echo = FALSE, message = FALSE}
+# In this case, we have different row numbers. This is due to the fact that casualties tables might have more than one row per each accident and more than one vehicle per accident. Thus, we will start by joining accidents and casualties by using left join on casualties
+
+# merge datasets by cAccident Index using left_join
+lj_data <- left_join(casualties.df, accidents.df, by = "ï..Accident_Index")
+```
+
+```{r echo = FALSE, message = FALSE}
+# clean data from empty rows in both datasets to merge
+accCas.data <- subset(lj_data, ï..Accident_Index != "-1" & nchar(lj_data$ï..Accident_Index) >= 12)
+vehicles.data <- subset(vehicles.df, ï..Accident_Index != "-1" & nchar(lj_data$ï..Accident_Index) >= 12)
+```
+
+```{r echo = FALSE, message = FALSE}
+# full join to include all rows from each data
+my.accidents.df <- full_join(accCas.data, vehicles.data, by = c("ï..Accident_Index"))
+save(my.accidents.df, file = "accidents.RData")
+```
+
+```{r}
+# There are 4424497 observations and 67 variables
+str(my.accidents.df) # This will output the structure of the data set
+```
+
+```{r}
+# Subset the data set based on the factors that can have an affect on accident severity
+
+accident.subset <- subset(my.accidents.df, select = c("ï..Accident_Index", "Accident_Severity", "Day_of_Week", "Time", "Road_Type", "Speed_limit", "Light_Conditions", "Urban_or_Rural_Area", "Vehicle_Type", "Sex_of_Driver", "Age_of_Driver", "Age_of_Vehicle")) 
+```
+
+
+# 1. Data Quality Analysis
+
+### Technically correct data
+We start by checking if the data set is technically correct, this would include:
+
+1.    storing the data set in a suitable data frame with meaningful column names 
+2.    checking whether columns are of the type that represents the values of each variable in the column
+
+The metadata associated provides a description for each column necessary to understand the meaning of each column and there is no need for a change in column names. The data is loaded from Github and well stored in a `r class(accident.subset)`.
+
+The following report shows the number of observations, number of variables and their types.
+```{r}
+# Change column name of ï..Accident_Index to Accident_Index
+# Change the class of the Accident_Severity, Day_of_Week, Road_Type, Speed_limit, Light_Conditions, Urban_or_Rural_Area, Vehicle_Type and Sex_of_Driver from integer to factor
+# Remove empty characters then Change the class of Time from character to time
+str(accident.subset) # This will output the structure of the data set
+```
+
+The following changes should be made:
+
+1. "Accident_Severity", "Road_Type", "Light_Conditions", "Urban_or_Rural_Area", "Vehicle_Type", "Sex_of_Driver" should be of type factor
+2. "Time" should be of type integer.
+3. Change column name of ï..Accident_Index to Accident_Index.
+
+### Consistent data quality check
+
+After our data is technically correct, we have to check if the data is consistent based on real world or domain specific knowledge.
+We note two types of consistency to check: in-record consistency and cross-record consistency.
+
+**In-record consistency:**
+This concerns checking consistency in each single variable. We note the following checks:
+
+* Mandatory values can not be empty (Accident index in our case)
+* Range, this help check for outliers
+* Uniqueness (no unique values to look at)
+* Set-membership constraints
+
+**Cross-record consistency:**
+This concerns checking if statistic summaries of different variables conflict. We note the following checks:
+
+* Referential integrity constraints
+* Domain specific rules and criteria
+
+While checking for the quality issues highlighted above, we have to evaluate the accuracy, completeness and consistency of our data.
+
+We will perform a series of checks aimed at revealing invalid or missing data and implausible values.
+
+This includes first summarizing some important values in our columns (in record consistency):
+
+1. sum of missing values (including empty values for columns of type character or factor) in each column
+2. number of duplicates
+3. Time can be rounded to an integer value (just the hour).
+
+*1. Sum of missing values*
+
+We start by showing the missingness in our dataset:
+
+1. All Categorical values with "-1" as value are missing
+2. The following values in our categorical variables are considered "unknown" or "not allocated" and thus missing
+    * Road Type: 9
+    * Light Conditions : 7
+    * Urban or Rural Area : 3
+    * Vehicle Type: 16
+    * Sex of Driver: 3
+3. Time and Accident index should not be empty
+
+```{r}
+# There are -1 values in the data set. Hence, remove rows with -1 values from the data set
+accident.subset[accident.subset == -1] <- NA # replace with NA to show missingness
+
+# There are rows from the variable Road_Type with the value 9 in the data set. Hence, remove those rows.
+accident.subset$Road_Type[accident.subset$Road_Type == 9] <- NA # replace with NA to show missingness
+
+
+# There are rows from the variable Light_Conditions with the value 7 in the data set. Hence, remove those rows.
+# replace with NA to show missingness
+accident.subset$Light_Conditions[accident.subset$Light_Conditions == 7] <- NA
+
+# There are rows from the variable Urban_or_Rural_Area with the value 3 in the data set. Hence, remove those rows.
+# replace with NA to show missingness
+accident.subset$Urban_or_Rural_Area[accident.subset$Urban_or_Rural_Area == 3] <- NA
+
+
+# There are rows from the variable Vehicle_Type with the value 16 in the data set. Hence, remove those rows.
+# replace with NA to show missingness
+accident.subset$Vehicle_Type[accident.subset$Vehicle_Type == 16] <- NA
+
+
+# There are rows from the variable Sex_of_Driver with the value 3 in the data set. Hence, remove those rows.
+# replace with NA to show missingness
+accident.subset$Sex_of_Driver[accident.subset$Sex_of_Driver == 3] <- NA
+
+# check char columns and show missingness when empty
+accident.subset$ï..Accident_Index[accident.subset$ï..Accident_Index == ""] <- NA
+accident.subset$Time[accident.subset$Time == ""] <- NA
+```
+
+After showing the missing in our data set, we count the number of missing values for each column.
+
+```{r}
+# Get all the rows and countsthat contain at least one missing value
+#columns.empty.vals <- colnames(accident.subset)[colSums(is.na(accident.subset)) > 0] # Check for any missing value
+get.empty.count <- function (col, col_name){
+  missingness.count <- round(sum(is.na(col)), 0)
+  paste(col_name, ": ", missingness.count, "missing value", collapse = " ")
+}
+sapply(seq_along(accident.subset), function(i) {
+  get.empty.count(accident.subset[[i]], names(accident.subset)[i])
+})
+
+```
+
+*2. number of duplicates*
+
+```{r}
+# There are 1,323,882 rows that are duplicates and should be removed from the data set 
+#accident.subset[duplicated(accident.subset), ] # This will output the duplicates in the data set
+dup <- duplicated(accident.subset)
+duplicate.df <- accident.subset[which(dup == TRUE), ]
+```
+
+There are `nrow(duplicate.df)` rows that are duplicates and should be removed from the data set
+
+*3. Time*
+
+For the time variable, we will create a new column "hour" showing only the hour of the accident. This will allow us to analyze the dataset in time intervals of one hour. The following table shows the count of accidents for each hour using the new created column.
+
+```{r}
+# create column time
+accident.subset$hour <- substr(accident.subset$Time, start = 1, stop = 2)
+accident.subset$hour <- as.integer(accident.subset$hour)
+table(accident.subset$hour)
+```
+
+**In-record consistency:**
+
+For in-record consistency, we add the following rules to our checking analysis:
+
+1. accident severity between 1 and 3
+2. Day of the week between 1 and 7
+3. Light conditions between 1 and 7
+4. Road type between 1 and 12
+5. Sex of driver between 1 and 3
+6. Vehicle type between 1 and 98
+7. Urban or rural area between 1 and 3
+8. check if there is "0" in speed limit (0 is not plausible), max value should be 70
+9. Age of driver between 14 and and 90 as threshold
+10. hour should be between "00" and "23"
+
+```{r}
+# set rules
+rules <- validator(
+  Accident_Severity > 0,
+  Accident_Severity < 4,
+  Age_of_Driver >= 16,
+  Age_of_Driver <= 90,
+  Day_of_Week > 0,
+  Day_of_Week < 8,
+  hour >= 0,
+  hour <= 23,
+  Speed_limit >= 20,
+  Speed_limit <= 70,
+  Light_Conditions > 0,
+  Light_Conditions < 8,
+  Road_Type > 0,
+  Road_Type < 13,
+  Sex_of_Driver > 0,
+  Sex_of_Driver < 4,
+  Vehicle_Type > 0,
+  Vehicle_Type < 99,
+  Urban_or_Rural_Area > 0,
+  Urban_or_Rural_Area < 4
+)
+
+#confront rules and store results in data frame
+checkResults <- confront(accident.subset, rules)
+checkResultsDF <- as.data.frame(checkResults)
+ProbResults <- subset(checkResultsDF, value == "FALSE")
+ProbResults
+
+barplot(checkResults,
+        xlab = "expression",
+        main = "Rules check results")
+```
+
+**Cross-record consistency:**
+
+There are no cross record checking to do.
+
+
+# 2. Data Cleaning
+
+First, we apply the following data cleaning steps:
+
+1. change the column name "ï..Accident_Index" to simply "Accident_Index"
+2. remove duplicated values
+3. omit and remove all rows with missing values
+
+```{r}
+
+# change column name of ï..Accident_Index to Accident_Index
+colnames(accident.subset)[colnames(accident.subset) == "ï..Accident_Index"] <- "Accident_Index"
+
+accident.subset <- accident.subset[which(dup == FALSE), ] # This will remove all the duplicate rows from the data set
+
+accident.subset <- na.omit(accident.subset) # This will remove rows with missing values
+```
+
+**In-record consistency cleaning:**
+
+Then, we apply the in-record consistency cleaning steps as listed in the data checking plan. All records with corrupted data will be removed.
+
+```{r}
+# Remove rows where age of driver is less than 16 or more than 90
+accident.subset <- accident.subset[!(accident.subset$Age_of_Driver < 16) , ]
+accident.subset <- accident.subset[!(accident.subset$Age_of_Driver > 90) , ]
+
+# Remove rows where Accident_Severity is corrupter
+accident.subset <- accident.subset[!(accident.subset$Accident_Severity < 0) , ]
+accident.subset <- accident.subset[!(accident.subset$Accident_Severity > 4) , ]
+
+# Remove rows where Day_of_Week is corrupter
+accident.subset <- accident.subset[!(accident.subset$Day_of_Week < 0) , ] 
+accident.subset <- accident.subset[!(accident.subset$Day_of_Week > 8) , ]
+
+# Remove rows where hour is corrupter
+accident.subset <- accident.subset[!(accident.subset$hour < 0) , ] 
+accident.subset <- accident.subset[!(accident.subset$hour  > 23) , ]
+
+# Remove rows where Speed_limit is corrupter
+accident.subset <- accident.subset[!(accident.subset$Speed_limit < 20) , ] 
+accident.subset <- accident.subset[!(accident.subset$Speed_limit > 70) , ]
+
+# Remove rows where Light_Conditions is corrupter
+accident.subset <- accident.subset[!(accident.subset$Light_Conditions < 0) , ] 
+accident.subset <- accident.subset[!(accident.subset$Light_Conditions > 8) , ]
+
+# Remove rows where Road_Type is corrupter
+accident.subset <- accident.subset[!(accident.subset$Road_Type < 0) , ] 
+accident.subset <- accident.subset[!(accident.subset$Road_Type > 99) , ]
+
+# Remove rows where Sex_of_Driver is corrupter
+accident.subset <- accident.subset[!(accident.subset$Sex_of_Driver < 0) , ] 
+accident.subset <- accident.subset[!(accident.subset$Sex_of_Driver > 4) , ]
+
+# Remove rows where Vehicle_Type is corrupter
+accident.subset <- accident.subset[!(accident.subset$Vehicle_Type < 0) , ] 
+accident.subset <- accident.subset[!(accident.subset$Vehicle_Type > 99) , ]
+
+# Remove rows where Urban_or_Rural_Area corrupter
+accident.subset <- accident.subset[!(accident.subset$Urban_or_Rural_Area  < 0) , ]
+accident.subset <- accident.subset[!(accident.subset$Urban_or_Rural_Area  > 4) , ]
+
+# This code will reorder row numbers
+row.names(accident.subset) <- NULL 
+```
+
+**Age of Vehicle and age of driver**
+
+One variable that was not checked is "age of vehicle". Since there is no rules about the age vehicle and taking into consideration that vintage cars exists, we will clean this variable by removing the outliers ranging outside the first and third quantile taking the 25% and 75% marks as lower and upper limit respectively. For this, we will use box plot to give us an idea about the age of vehicles we are removing. Same process will be applied on the variable "age of driver" as extra measure.
+
+```{r}
+opar <- par()
+par(mfrow = c(1,2))
+
+boxplot(accident.subset$Age_of_Driver, data = accident.subset, main="Age of driver")
+boxplot(accident.subset$Age_of_Vehicle, data = accident.subset, main="Age of vehicle")
+
+par(opar)
+```
+
+Age of drivers show outliers above the age 85 while any vehicle with age above 20 is considered an outlier. These numbers are representative of the real world as by the age of 70, UK residents should renew their license to be able to drive and usually cars with age above 20 are rare. We will proceed in removing these rows.
+
+```{r}
+# Remove outliers in the two numerical variables
+QDriver <- quantile(accident.subset$Age_of_Driver, probs = c(.25, .75))
+QVehicle <- quantile(accident.subset$Age_of_Vehicle, probs = c(.25, .75))
+
+iqrDriver <- IQR(accident.subset$Age_of_Driver)
+iqrVehicle <- IQR(accident.subset$Age_of_Vehicle)
+
+accident.subset <- subset(accident.subset, accident.subset$Age_of_Driver > (QDriver[1] - 1.5*iqrDriver) & accident.subset$Age_of_Driver < (QDriver[2]+1.5*iqrDriver))
+accident.subset <- subset(accident.subset, accident.subset$Age_of_Vehicle > (QVehicle[1] - 1.5*iqrVehicle) & accident.subset$Age_of_Vehicle < (QVehicle[2]+1.5*iqrVehicle))
+```
+
+We will have another look on the boxplot of these two numerical variables.
+
+```{r}
+opar <- par()
+par(mfrow = c(1,2))
+
+boxplot(accident.subset$Age_of_Driver, data = accident.subset, main="Age of driver")
+boxplot(accident.subset$Age_of_Vehicle, data = accident.subset, main="Age of vehicle")
+
+par(opar)
+```
+
+The outliers have been removed except two in "age of driver". This does not show any inconsistency and thus we will resume our analysis.
+
+**Consistent and technically correct data**
+
+Now that the cleaning steps are implemented, we finish by converting the variables "Accident_Severity", "Speed_limit", "Day_of_Week", "Road_Type", "Light_Conditions", "Urban_or_Rural_Area", "Vehicle_Type", "Sex_of_Driver" to factor.
+
+```{r}
+# set categorical variables
+cat.variables <- c("Accident_Severity", "Speed_limit", "Day_of_Week", "Road_Type", "Light_Conditions", "Urban_or_Rural_Area", "Vehicle_Type", "Sex_of_Driver")
+# set continuous variables
+cont.variables <- c("hour", "Age_of_Driver", "Age_of_Vehicle")
+
+# change the classes of correspondent variables to factor.
+accident.subset[cat.variables] <- lapply(accident.subset[cat.variables], as.factor)
+```
+
+The resulting table shows the following structure and summary:
+
+```{r}
+# Check the structure of the data set
+str(accident.subset)
+
+# Check the summary of the data set
+summary(accident.subset) 
+```
+
+The dataset will now be saved in the data frame accidentData and in an Rda file "accidentData.Rda".
+
+```{r}
+accidentData <- accident.subset # Change the name of the data set
+# Save Data to file
+save(accidentData, file="accidentData.rda")
+```
+
+# 3. Exploratory Data Analysis
+
+```{r}
+# this is just not to reload the dataset from before cleaning in case of error
+#load("accidentData.RData")
+load("accidentData.rda")
+cat.variables <- c("Accident_Severity", "Speed_limit", "Day_of_Week", "Road_Type", "Light_Conditions", "Urban_or_Rural_Area", "Vehicle_Type", "Sex_of_Driver")
+
+cont.variables <- c("hour", "Age_of_Driver", "Age_of_Vehicle")
+```
+
+## 3.1 EDA plan
+
+We will start our EDA by asking one important question: what type of variation and co-variation occurs in our data set? To answer this question, we will have to explore the underlying structure of each variable and the relationships between them. We highlight the following steps:
+
+1. summarize and visualize data for both categorical and continuous variables
+2. explore and visualize subgroups of certain variables to compare differences
+3. explore relationships between variables
+
+Our exploratory data analysis should allow us to refine our research question and help discover if we have the right data for the right question. The goal is to build a suitable predictive model for accident severity.
+
+## 3.2 Summary of results
+
+### Accident Severity and categorical variables
+
+In the following section, we will explore the categorical variables "Accident_Severity", "Speed_limit", "Day_of_Week", "Road_Type", "Light_Conditions", "Urban_or_Rural_Area", "Vehicle_Type" and "Sex_of_Driver".
+
+
+**Day of week**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Day_of_Week) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory in days has its own bar
+bar.plot <- ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Day_of_Week)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Days",
+       x = "Accident Severity")
+
+# plot the percentages calculated and saved
+percentage.plot <- ggplot(plotdata, aes(x = Accident_Severity,
+                             fill = Day_of_Week, y = pct)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2),
+                     label = percent) +
+  geom_text(aes(label = lbl),
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent",
+       fill = "Days",
+       x = "Accident Severity", 
+       title = "Accident severity percentage by day")
+
+ggarrange(bar.plot,
+          percentage.plot,
+          ncol = 2,
+          nrow = 1)
+
+# One way frequency table- to check proportion of levels
+Frequency_Day_of_Week <- table(accidentData$Day_of_Week)
+# 1 = Sunday and so on...
+prop.table(Frequency_Day_of_Week)
+# Friday most common (16.48%), Sunday least common (11.74%) Monday =13.93%, Tuesday =14.46%, Wednesday = 14.59%, Thursday =14.74% and Saturday =14.03%
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Day_of_Week, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# Largest chisq statistic is found on sunday within the serious accident severity column
+# Next largest is Saturday for fatal accident severity
+
+# chisq test
+chisq.test(Frequency_Day_of_Week) 
+```
+
+**Road type**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Road_Type) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory in road type has its own bar
+bar.plot <- ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Road_Type)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Road Type",
+       x = "Accident Severity")
+
+# plot the percentages calculated and saved
+percentage.plot <- ggplot(plotdata, aes(x = Accident_Severity,
+                             fill = Road_Type, y = pct)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2),
+                     label = percent) +
+  geom_text(aes(label = lbl),
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent",
+       fill = "Road Type",
+       x = "Accident Severity", 
+       title = "Accident severity percentage by Road Type")
+
+ggarrange(bar.plot,
+          percentage.plot,
+          ncol = 2,
+          nrow = 1)
+
+# One way frequency table- to check proportion of levels
+Frequency_Road_Type <- table(accidentData$Road_Type)
+# 1 = roundabout, 2 = one way st, 3 = dual carriageway, 6 = single carriageway, 7 = slip rd, 9 = unknown, 
+prop.table(Frequency_Road_Type)
+# single carriageway most common (0.71%), unknown least common (0%), Roundabout =6%, One way st =1.4%, Dual carriageway = 19.49%, slip rd =1.2%
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Road_Type, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# Largest chisq statistic roundabout and severe accident, next largest is between roundabout and fatal accident.
+
+# chisq test
+chisq.test(Frequency_Road_Type) 
+```
+
+**Speed limit**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Speed_limit) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory in Speed_limit has its own bar
+bar.plot <- ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Speed_limit)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Speed limit",
+       x = "Accident Severity")
+
+# plot the percentages calculated and saved
+percentage.plot <- ggplot(plotdata, aes(x = Accident_Severity,
+                             fill = Speed_limit, y = pct)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2),
+                     label = percent) +
+  geom_text(aes(label = lbl),
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent",
+       fill = "Speed limit",
+       x = "Accident Severity", 
+       title = "Accident severity percentage by day")
+
+ggarrange(bar.plot,
+          percentage.plot,
+          ncol = 2,
+          nrow = 1)
+
+# One way frequency table- to check proportion of levels
+Frequency_Speed_limit <- table(accidentData$Speed_limit)
+prop.table(Frequency_Speed_limit)
+# Most accidents took place on roads with a speed limit of 40 mph, 20 mph, 30 mph respectively
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Speed_limit, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# The largest chisq statistics came from 60 mph roads and accounted for 1. Fatal and 2. Severe accidents
+
+# chisq test
+chisq.test(Frequency_Speed_limit) 
+```
+
+**Light Conditions**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Light_Conditions) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory has its own bar
+bar.plot <- ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Light_Conditions)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Light conditions",
+       x = "Accident Severity")
+
+# plot the percentages calculated and saved
+percentage.plot <- ggplot(plotdata, aes(x = Accident_Severity,
+                             fill = Light_Conditions, y = pct)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2),
+                     label = percent) +
+  geom_text(aes(label = lbl),
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent",
+       fill = "Light Conditions",
+       x = "Accident Severity", 
+       title = "Accident severity percentage by day")
+
+ggarrange(bar.plot,
+          percentage.plot,
+          ncol = 2,
+          nrow = 1)
+
+# One way frequency table- to check proportion of levels
+Frequency_Light_Conditions <- table(accidentData$Light_Conditions)
+# 1= daylight, 4= darkness-lights lit , 5= darkness- lights unlit, 6= darkness- no lighting
+prop.table(Frequency_Light_Conditions)
+# 74.57% Daylight, 18.75% Darkness- lights lit, 6% Darkness- no lighting, <1% Darkness- lights unlit
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Light_Conditions, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# Largest chisq statistic for Darkness- no lighting and fatal and severe accidents
+
+# chisq test
+chisq.test(Frequency_Light_Conditions) 
+```
+
+**Urban or Rural Area**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Urban_or_Rural_Area) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory has its own bar
+bar.plot <- ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Urban_or_Rural_Area)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Urban or Rural Area",
+       x = "Accident Severity")
+
+# plot the percentages calculated and saved
+percentage.plot <- ggplot(plotdata, aes(x = Accident_Severity,
+                             fill = Urban_or_Rural_Area, y = pct)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2),
+                     label = percent) +
+  geom_text(aes(label = lbl),
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent",
+       fill = "Urban or Rural Area",
+       x = "Accident Severity", 
+       title = "Accident severity percentage by day")
+
+ggarrange(bar.plot,
+          percentage.plot,
+          ncol = 2,
+          nrow = 1)
+
+# One way frequency table- to check proportion of levels
+Frequency_Urban_or_Rural_Area <- table(accidentData$Urban_or_Rural_Area)
+prop.table(Frequency_Urban_or_Rural_Area)
+#  1 Urban = 57.10%, 2 Rural = 42.89%
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Urban_or_Rural_Area, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# Largest chisq statistic in rural areas
+
+# chisq test
+chisq.test(Frequency_Urban_or_Rural_Area) 
+```
+
+**Vehicle Type**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Vehicle_Type) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory has its own bar
+ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Vehicle_Type)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Vehicle Type",
+       x = "Accident Severity")
+
+
+# One way frequency table- to check proportion of levels
+Frequency_Vehicle_Type <- table(accidentData$Vehicle_Type)
+prop.table(Frequency_Vehicle_Type)
+# Cars and motorcycle are the most commonly involved in accidents
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Vehicle_Type, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# Motorcycle over 800cc has the highest chisq statistic for severe accidents
+
+# chisq test
+chisq.test(Frequency_Vehicle_Type) 
+```
+
+**Sex of Driver**
+
+```{r}
+# here we are grouping our table based on subcategories  to calculate the probabilities and percentages of each combination of the subcategories in both variables
+plotdata <- accidentData %>%
+  group_by(Accident_Severity, Sex_of_Driver) %>%
+  summarize(n = n()) %>%
+  mutate(pct = n / sum(n),
+         lbl = scales::percent(pct))
+
+# plot: each subcategory has its own bar
+bar.plot <- ggplot(accidentData, aes(x = Accident_Severity,
+                        fill = Sex_of_Driver)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  labs(y = "Number of Accidents",
+       fill = "Sex of Driver",
+       x = "Accident Severity")
+
+# plot the percentages calculated and saved
+percentage.plot <- ggplot(plotdata, aes(x = Accident_Severity,
+                             fill = Sex_of_Driver, y = pct)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(breaks = seq(0, 1, .2),
+                     label = percent) +
+  geom_text(aes(label = lbl),
+            size = 3,
+            position = position_stack(vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "Percent",
+       fill = "Sex of Driver",
+       x = "Accident Severity", 
+       title = "Accident severity percentage by day")
+
+ggarrange(bar.plot,
+          percentage.plot,
+          ncol = 2,
+          nrow = 1)
+
+# One way frequency table- to check proportion of levels
+Frequency_Sex_of_Driver <- table(accidentData$Sex_of_Driver)
+prop.table(Frequency_Sex_of_Driver)
+# 66.62% Male, 33.37% Female, 0 Unknowns
+
+# Create two way contingency table to look for relationship between variables
+CrossTable(accidentData$Sex_of_Driver, accidentData$Accident_Severity,2, prop.chisq = TRUE)
+# Chisq statistic largest for females
+
+# chisq test
+chisq.test(Frequency_Sex_of_Driver) 
+```
+
+### Numerical Variables
+
+First, we will visualize the three variables hour, age of driver and age of vehicle individually both numerically and graphically.
+
+```{r}
+# display summary table
+accident_num_table <- apply(accidentData[, cont.variables], 2, summary)
+accident_num_table
+
+# display histograms and density plots
+opar <- par()
+par(mfrow = c(3,2))
+
+hist(accidentData$hour, main = "Hour Histogram", xlab = "hour")
+plot(density(accidentData$hour), main = "Hour Density", xlab = "hour")
+
+hist(accidentData$Age_of_Driver, main = "Age of Driver Histogram", xlab = "Age of driver")
+plot(density(accidentData$Age_of_Driver), main = "Age of Drive densityr", xlab = "Age of Driver")
+
+hist(accidentData$Age_of_Vehicle, main = "Age of Vehicle Histogram", xlab = "Age of vehicle")
+plot(density(accidentData$Age_of_Vehicle), main = "Age of Vehicle density", xlab = "Age of Vehicle")
+
+par(opar)
+```
+
+```{r}
+# display distribution according to accident severity
+boxplot(hour ~ Accident_Severity, data = accidentData, main = "Hour to accident severity")
+boxplot(Age_of_Driver ~ Accident_Severity, data = accidentData, main = "Age of driver to accident severity")
+boxplot(Age_of_Vehicle ~ Accident_Severity, data = accidentData, main = "Age of vehicle to accident severity")
+```
+
+```{r}
+# test difference in means for independent set of values
+aov.driver.age <- aov(accidentData$Age_of_Driver ~ accidentData$Accident_Severity)
+summary.lm(aov.driver.age)
+
+# test difference in means for independent set of values
+aov.hour.age <- aov(accidentData$hour ~ accidentData$Accident_Severity)
+summary.lm(aov.hour.age)
+```
+
+```{r}
+# test difference in means for independent set of values
+aov.vehicle.age <- aov(accidentData$Age_of_Vehicle ~ accidentData$Accident_Severity)
+summary.lm(aov.vehicle.age)
+```
+
+```{r}
+# Note: Saving the data as CSV file to use it for unsupervised learning method using Jupyter Notebook
+write.csv(accidentData, file = "accidentData.csv")
+```
+
+```{r}
+# Note: It is better to close everything and exist Rstudio then open it and load accidentData.rda. This is to avoid shortage in RAM.
+load("accidentData.rda")
+```
+
+# 4. Machine Learning Algorithm
+
+## Machine Learning plan
+
+Load libraries needed
+
+1. Subset the data based on features that are of interest which are age of driver, age of vehicle, hour, and accident severity    
+
+2. Check if there is any imbalance in the target variable (Accident Severity), if there is then balance the data using WERCSClassif function from UBL package and apply it only on training data. 
+
+3. Subset train and test
+
+4. Apply Decision Tree
+
+5. Apply Multilayer Perceptron Neural Network for Multi-Class Classification
+
+```{r}
+# Libraries to load
+
+if(require(rpart) == FALSE){
+  install.packages('rpart')
+  library(rpart)
+}
+
+if(require(UBL) == FALSE){
+  install.packages('UBL')
+  library(UBL)
+}
+
+if(require(caret) == FALSE){
+  install.packages('caret')
+  library(caret)
+}
+
+if(require(dplyr) == FALSE){
+  install.packages('dplyr')
+  library(dplyr)
+}
+```
+
+```{r}
+# Let accident severity be last column
+accidentData <- accidentData %>% relocate(Accident_Severity, .after = last_col())
+
+# Subset the data
+accidentDataSub <- accidentData[,10:13]
+```
+
+```{r}
+#barplot to check for levels
+barplot(prop.table(table(accidentDataSub$Accident_Severity)),
+        col = rainbow(3),
+        ylim = c(0, 1),
+        ylab = 'Proportion',
+        xlab = 'Accident_Severity',
+        cex.names = 1.5)
+```
+
+## Decision Tree
+
+***Partition data into Training and Testing datasets***
+```{r}
+# Split the data into training and test set
+set.seed(2021)
+training_ind <- sample(2, nrow(accidentDataSub), replace = TRUE, prob = c(0.7, 0.3))
+trainAccident <- accidentDataSub[training_ind == 1,]
+testAccident <- accidentDataSub[training_ind ==2,]
+```
+
+```{r}
+# This will be used as the training data
+AccidentTrain <- WERCSClassif(Accident_Severity ~., trainAccident, C.perc = "balance")
+table(AccidentTrain$Accident_Severity)
+```
+
+***Decision tree training***
+```{r}
+# Build model 1
+set.seed(2021)
+model1 <- rpart(Accident_Severity~., data = AccidentTrain, method = "class")
+
+# Plot the final trees for model 1
+par(xpd = NA) # This is to avoid clipping the text
+plot(model1)
+text(model1, digits = 3)
+```
+***Decision tree Prediction***
+```{r}
+# Make predictions on the test data
+predicted.classesM1 <- model1 %>% 
+  predict(testAccident, type = "class")
+head(predicted.classesM1)
+```
+
+
+The overall accuracy of the tree model is ~69%, which is considered satisfactory but not good.
+```{r}
+# Compute model 1 accuracy rate on test data
+mean(predicted.classesM1 == testAccident$Accident_Severity)
+``` 
+***Confusion Matrix model 1***
+```{r}
+confusionMatrix(predicted.classesM1, testAccident$Accident_Severity)
+```
+
+***Decision Tree Model 2***
+```{r}
+# Fit model 2 on the training set
+set.seed(2021)
+model2 <- train(
+  Accident_Severity ~., data = AccidentTrain, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+# Plot model 2 accuracy vs different values of cp (complexity parameter)
+plot(model2)
+```
+
+```{r}
+# Print the best tuning parameter complexity parameter that maximises model 2 accuracy
+model2$bestTune
+```
+
+```{r}
+# Plot the final tree for model 2
+par(xpd = NA) # This is to avoid clipping the text
+plot(model2$finalModel)
+text(model2$finalModel,  digits = 3)
+```
+
+```{r}
+# Decision rule model 2
+model2$finalModel
+```
+
+The overall accuracy of the tree model 2 is ~54%.
+```{r}
+# Predictions on the test data
+predicted.classesM2 <- model2 %>% predict(testAccident)
+# Computing model accuracy rate on the test data
+mean(predicted.classesM2 == testAccident$Accident_Severity)
+```
+
+***Confusion Matrix model 2***
+```{r}
+confusionMatrix(predicted.classesM2, testAccident$Accident_Severity)
+```
+
+```{r}
+# Note: It is better to close everything and exist Rstudio then open it and load accidentData.rda. This is to avoid shortage in RAM.
+load("accidentData.rda")
+```
+
+## Multilayer perceptron Neural Network for multinomial classification
+
+```{r}
+# Load keras library
+
+if(require(keras) == FALSE){
+  install.packages('keras')
+  library(keras)
+}
+
+install_keras()
+```
+
+```{r}
+# Load libraries needed
+
+if(require(UBL) == FALSE){
+  install.packages('UBL')
+  library(UBL)
+}
+
+if(require(dplyr) == FALSE){
+  install.packages('dplyr')
+  library(dplyr)
+}
+
+if(require(caret) == FALSE){
+  install.packages('caret')
+  library(caret)
+}
+```
+
+```{r}
+# Let accident severity be last column
+accidentDataSub <- accidentData %>% relocate(Accident_Severity, .after = last_col())
+
+# Subset the data
+accidentDataSub <- accidentDataSub[,10:13]
+```
+
+```{r}
+# Check the structure of the data
+str(accidentDataSub)
+```
+
+
+***Change the data to matrix***
+```{r}
+accidentDataSubNN <- as.matrix(accidentDataSub)
+dimnames(accidentDataSubNN) <- NULL
+```
+
+***Normalise the data***
+```{r}
+mode(accidentDataSubNN) <- "numeric"
+accidentDataSubNN[,1:3] <- normalize(accidentDataSubNN[,1:3])
+accidentDataSubNN[, 4] <- as.numeric(accidentDataSubNN[, 4]) -1
+summary(accidentDataSubNN)
+```
+
+***Data Partition***
+```{r}
+# Split the data into training and test set
+set.seed(2021)
+training_indNN <- sample(2, nrow(accidentDataSubNN), replace = TRUE, prob = c(0.7, 0.3))
+trainNN <- accidentDataSubNN[training_indNN == 1,]
+```
+
+This will be used as the training data due to imbalance in accident severity levels
+```{r}
+# First change the training data set to dataframe then after balancing it change it to matrix
+trainNN <- as.data.frame(trainNN)
+AccidentTrainNN <- WERCSClassif(V4 ~., trainNN, C.perc = "balance")
+table(AccidentTrainNN$V4)
+AccidentTrainNN <- as.matrix(AccidentTrainNN)
+```
+
+```{r}
+# split the training data into training and training target
+trainAccidentNN <- AccidentTrainNN[ , 1:3]
+trainingTargetNN <- AccidentTrainNN[, 4]
+
+# split the test data into test and test target
+testAccidentNN <- accidentDataSubNN[training_indNN == 2, 1:3]
+testTargetNN <- accidentDataSubNN[training_indNN == 2, 4]
+```
+
+***One Hot Encoding***
+```{r}
+LabelsTrain <- to_categorical(trainingTargetNN)
+LabelsTest <- to_categorical(testTargetNN)
+```
+
+***Creating Sequential Model 1***
+```{r}
+model1NN <- keras_model_sequential()
+model1NN %>%
+  layer_dense(units = 100, activation = 'relu', input_shape = c(3)) %>%
+  layer_dense(units = 3, activation = 'softmax')
+summary(model1NN)
+```
+
+***Compile model 1***
+```{r}
+model1NN %>%
+  compile(loss = 'categorical_crossentropy',
+          optimizer = 'adam',
+          metrics = 'accuracy')
+```
+
+***Fit model 1***
+```{r}
+ModelHistory <- model1NN %>%
+  fit(trainAccidentNN,
+      LabelsTrain,
+      epoch = 100,
+      batch_size = 32,
+      validation_split = 0.2)
+```
+
+```{r}
+plot(ModelHistory)
+```
+
+***Model 1 Evaluation using the test data***
+```{r}
+NNModel1 <- model1NN %>%
+  evaluate(testAccidentNN, LabelsTest)
+```
+
+***Prediction and Confusion Matrix for model 1***
+```{r}
+Model_probability <- model1NN %>%
+  predict_proba(testAccidentNN)
+```
+
+```{r}
+Model_Prediction <- model1NN %>%
+  predict_classes(testAccidentNN)
+```
+
+```{r}
+TableModel1NN <- table(Predicted = Model_Prediction, Actual = testTargetNN)
+TableModel1NN
+```
+
+***Tuning the Model***
+
+***Create Sequential Model 2***
+```{r}
+model2NN <- keras_model_sequential()
+model2NN %>%
+  layer_dense(units = 100, activation = 'relu', input_shape = c(3)) %>%
+  layer_dense(units = 10, activation = 'relu') %>%
+  layer_dense(units = 3, activation = 'softmax')
+summary(model2NN)
+```
+
+***Compile model 2***
+```{r}
+model2NN %>%
+  compile(loss = 'categorical_crossentropy',
+          optimizer = 'adam',
+          metrics = 'accuracy')
+```
+
+***Fit model 2***
+```{r}
+Model2History <- model2NN %>%
+  fit(trainAccidentNN,
+      LabelsTrain,
+      epoch = 100,
+      batch_size = 32,
+      validation_split = 0.2)
+```
+
+```{r}
+plot(Model2History)
+```
+
+***Model 2 Evaluation using test data***
+```{r}
+NNModel2 <- model2NN %>%
+  evaluate(testAccidentNN, LabelsTest)
+```
+
+***Prediction and Confusion Matrix for model 2***
+```{r}
+Model2_probability <- model2NN %>%
+  predict_proba(testAccidentNN)
+```
+
+```{r}
+Model2_Prediction <- model2NN %>%
+  predict_classes(testAccidentNN)
+```
+
+```{r}
+TableModel2NN <- table(Predicted = Model2_Prediction, Actual = testTargetNN)
+TableModel2NN
+```
+
